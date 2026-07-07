@@ -1,5 +1,7 @@
 document.documentElement.classList.remove("no-js");
 
+document.documentElement.dataset.svjScript = "leads-v3";
+
 const LEADS_ENDPOINT = "https://xktkgpbqsptsxjajsofl.supabase.co/functions/v1/svj-leads";
 
 const navToggle = document.querySelector("[data-nav-toggle]");
@@ -84,7 +86,7 @@ document.querySelectorAll("[data-estimator]").forEach((estimator) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       const targetSelector = estimator.dataset.target || "#poptavka";
-      const formTarget = document.querySelector(targetSelector) || document.querySelector("[data-contact-form]");
+      const formTarget = document.querySelector(targetSelector)?.querySelector("form") || document.querySelector("[data-contact-form], form.contact-form");
 
       if (formTarget) {
         formTarget.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -101,15 +103,26 @@ document.querySelectorAll("[data-estimator]").forEach((estimator) => {
   updateEstimate();
 });
 
-document.querySelectorAll("[data-contact-form]").forEach((form) => {
+const contactForms = Array.from(document.querySelectorAll("[data-contact-form], form.contact-form"));
+
+contactForms.forEach((form) => {
+  if (form.dataset.svjBound === "true") return;
+  form.dataset.svjBound = "true";
+
   const status = ensureFormStatus(form);
   const submit = form.querySelector("button[type='submit']");
   prepareSpamFields(form);
+  setFormStatus(status, "Online formulář je připravený. Vyplňte údaje a klikněte na odeslat.", "ready");
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    if (!form.reportValidity()) return;
+    setFormStatus(status, "Kontroluji formulář...", "loading");
+
+    if (!form.reportValidity()) {
+      setFormStatus(status, "Doplňte prosím povinná pole označená formulářem.", "warning");
+      return;
+    }
 
     const data = new FormData(form);
     const spamCheck = checkSpamFields(data);
@@ -120,7 +133,7 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
 
     const payload = buildLeadPayload(form, data);
 
-    setFormStatus(status, "Odesílám poptávku...", "loading");
+    setFormStatus(status, "Odesílám poptávku do SVJ systému...", "loading");
     if (submit) submit.disabled = true;
 
     try {
@@ -151,7 +164,12 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
 
 function ensureFormStatus(form) {
   let status = form.querySelector("[data-form-status]");
-  if (status) return status;
+  if (status) {
+    status.classList.add("form-status");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    return status;
+  }
 
   status = document.createElement("p");
   status.setAttribute("data-form-status", "");
@@ -160,7 +178,7 @@ function ensureFormStatus(form) {
   status.className = "form-status";
 
   const submit = form.querySelector("button[type='submit']");
-  if (submit && submit.parentElement) {
+  if (submit) {
     submit.insertAdjacentElement("afterend", status);
   } else {
     form.append(status);
@@ -224,8 +242,17 @@ function buildLeadPayload(form, data) {
   return {
     form_name: form.dataset.formName || "svj-form",
     subject: form.dataset.subject || "Poptávka SVJ Project",
-    supabase_table: form.dataset.supabaseTable || "",
+    supabase_table: form.dataset.supabaseTable || inferSupabaseTableFromPath(),
     submitted_at: new Date().toISOString(),
     fields
   };
+}
+
+function inferSupabaseTableFromPath() {
+  const path = window.location.pathname.toLowerCase();
+  if (path.includes("print")) return "print_requests";
+  if (path.includes("media")) return "media_requests";
+  if (path.includes("autoservis")) return "service_requests";
+  if (path.includes("evolution")) return "evolution_waitlist";
+  return "leads";
 }
