@@ -102,7 +102,7 @@ document.querySelectorAll("[data-estimator]").forEach((estimator) => {
 });
 
 document.querySelectorAll("[data-contact-form]").forEach((form) => {
-  const status = form.querySelector("[data-form-status]");
+  const status = ensureFormStatus(form);
   const submit = form.querySelector("button[type='submit']");
   prepareSpamFields(form);
 
@@ -114,13 +114,13 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
     const data = new FormData(form);
     const spamCheck = checkSpamFields(data);
     if (!spamCheck.ok) {
-      if (status) status.textContent = spamCheck.message;
+      setFormStatus(status, spamCheck.message, "warning");
       return;
     }
 
     const payload = buildLeadPayload(form, data);
 
-    if (status) status.textContent = "Odesílám poptávku...";
+    setFormStatus(status, "Odesílám poptávku...", "loading");
     if (submit) submit.disabled = true;
 
     try {
@@ -133,23 +133,46 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
       const result = await response.json().catch(() => ({}));
 
       if (!response.ok || !result.success) {
-        if (status) status.textContent = result.message || "Poptávku se nepodařilo odeslat. Zkuste to prosím znovu.";
+        setFormStatus(status, result.message || "Poptávku se nepodařilo odeslat. Zkuste to prosím znovu.", "error");
         return;
       }
 
-      if (status) status.textContent = result.message || "Děkujeme. Poptávka byla odeslaná.";
+      setFormStatus(status, result.message || "Děkujeme. Poptávka byla odeslaná.", "success");
       form.reset();
       refreshFormStartedAt(form);
     } catch (error) {
       console.error("SVJ lead form error", error);
-      if (status) {
-        status.textContent = "Odeslání se nepodařilo. Zkuste to prosím znovu za chvíli, nebo nám zavolejte.";
-      }
+      setFormStatus(status, "Odeslání se nepodařilo. Zkuste to prosím znovu za chvíli, nebo nám zavolejte.", "error");
     } finally {
       if (submit) submit.disabled = false;
     }
   });
 });
+
+function ensureFormStatus(form) {
+  let status = form.querySelector("[data-form-status]");
+  if (status) return status;
+
+  status = document.createElement("p");
+  status.setAttribute("data-form-status", "");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.className = "form-status";
+
+  const submit = form.querySelector("button[type='submit']");
+  if (submit && submit.parentElement) {
+    submit.insertAdjacentElement("afterend", status);
+  } else {
+    form.append(status);
+  }
+  return status;
+}
+
+function setFormStatus(status, message, type) {
+  if (!status) return;
+  status.textContent = message;
+  status.dataset.state = type;
+}
 
 function prepareSpamFields(form) {
   if (!form.querySelector("[name='website']")) {
