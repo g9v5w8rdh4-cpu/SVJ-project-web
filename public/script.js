@@ -1,5 +1,7 @@
 document.documentElement.classList.remove("no-js");
 
+const LEADS_ENDPOINT = "https://xktkgpbqsptsxjajsofl.supabase.co/functions/v1/svj-leads";
+
 const navToggle = document.querySelector("[data-nav-toggle]");
 const nav = document.querySelector("[data-nav]");
 
@@ -52,32 +54,48 @@ const moneyFormatter = new Intl.NumberFormat("cs-CZ", {
 
 document.querySelectorAll("[data-estimator]").forEach((estimator) => {
   const base = Number(estimator.dataset.base || 0);
-  const mail = estimator.dataset.mail || "info@svjprojekt.cz";
   const subject = estimator.dataset.subject || "Poptávka SVJ Project";
   const totalNode = estimator.querySelector("[data-total]");
   const link = estimator.querySelector("[data-estimate-link]");
   const inputs = Array.from(estimator.querySelectorAll("input[type='checkbox'][data-price]"));
+  let estimateSummary = "";
 
   const updateEstimate = () => {
     const selected = inputs.filter((input) => input.checked);
     const total = selected.reduce((sum, input) => sum + Number(input.dataset.price || 0), base);
     const selectedLabels = selected.map((input) => input.parentElement.textContent.trim());
-    const body = [
-      "Dobrý den,",
+
+    estimateSummary = [
+      subject,
       "",
-      "posílám orientační poptávku:",
+      "Orientační výběr z kalkulátoru:",
       selectedLabels.length ? selectedLabels.map((label) => `- ${label}`).join("\n") : "- zatím bez vybraných položek",
       "",
       `Orientační částka z webu: ${moneyFormatter.format(total)}`,
       "",
-      "Doplňuji konkrétní zadání:"
+      "Konkrétní zadání:"
     ].join("\n");
 
     if (totalNode) totalNode.textContent = moneyFormatter.format(total);
-    if (link) {
-      link.href = `mailto:${mail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    }
+    if (link) link.setAttribute("href", estimator.dataset.target || "#poptavka");
   };
+
+  if (link) {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const targetSelector = estimator.dataset.target || "#poptavka";
+      const formTarget = document.querySelector(targetSelector) || document.querySelector("[data-contact-form]");
+
+      if (formTarget) {
+        formTarget.scrollIntoView({ behavior: "smooth", block: "start" });
+        const messageField = formTarget.querySelector("textarea[name='message'], textarea[name='problem'], textarea[name='intended_use']");
+        if (messageField && !messageField.value.trim()) {
+          messageField.value = estimateSummary;
+          messageField.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+    });
+  }
 
   inputs.forEach((input) => input.addEventListener("change", updateEstimate));
   updateEstimate();
@@ -86,7 +104,6 @@ document.querySelectorAll("[data-estimator]").forEach((estimator) => {
 document.querySelectorAll("[data-contact-form]").forEach((form) => {
   const status = form.querySelector("[data-form-status]");
   const submit = form.querySelector("button[type='submit']");
-  const subject = form.dataset.subject || "Poptávka SVJ Project";
   prepareSpamFields(form);
 
   form.addEventListener("submit", async (event) => {
@@ -101,15 +118,13 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
       return;
     }
 
-    const emailTarget = getMailTarget(form);
-    const body = buildMailBody(data, form.dataset.formName || "svj-form");
     const payload = buildLeadPayload(form, data);
 
     if (status) status.textContent = "Odesílám poptávku...";
     if (submit) submit.disabled = true;
 
     try {
-      const response = await fetch("/api/leads", {
+      const response = await fetch(LEADS_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -118,22 +133,18 @@ document.querySelectorAll("[data-contact-form]").forEach((form) => {
       const result = await response.json().catch(() => ({}));
 
       if (!response.ok || !result.success) {
-        if (response.status >= 500 || response.status === 404 || response.status === 503) {
-          throw new Error("endpoint-unavailable");
-        }
-
-        if (status) status.textContent = result.message || "Zkontrolujte prosím vyplněné údaje.";
+        if (status) status.textContent = result.message || "Poptávku se nepodařilo odeslat. Zkuste to prosím znovu.";
         return;
       }
 
       if (status) status.textContent = result.message || "Děkujeme. Poptávka byla odeslaná.";
       form.reset();
       refreshFormStartedAt(form);
-    } catch {
-      if (status) status.textContent = "Online odeslání teď neběží. Otevřu e-mail jako náhradní cestu.";
-      window.setTimeout(() => {
-        window.location.href = `mailto:${emailTarget}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      }, 350);
+    } catch (error) {
+      console.error("SVJ lead form error", error);
+      if (status) {
+        status.textContent = "Odeslání se nepodařilo. Zkuste to prosím znovu za chvíli, nebo nám zavolejte.";
+      }
     } finally {
       if (submit) submit.disabled = false;
     }
@@ -185,6 +196,8 @@ function buildLeadPayload(form, data) {
     fields[key] = typeof value === "string" ? value.trim() : value;
   });
 
+  if (!fields.source_page) fields.source_page = window.location.pathname || "/";
+
   return {
     form_name: form.dataset.formName || "svj-form",
     subject: form.dataset.subject || "Poptávka SVJ Project",
@@ -192,64 +205,4 @@ function buildLeadPayload(form, data) {
     submitted_at: new Date().toISOString(),
     fields
   };
-}
-
-function getMailTarget(form) {
-  const source = form.querySelector("[name='division'], [name='product'], [name='brand_scope']")?.value || "";
-
-  if (source.includes("print")) return "print@svjprojekt.cz";
-  if (source.includes("media")) return "media@svjprojekt.cz";
-  if (source.includes("autoservis")) return "autoservis@svjprojekt.cz";
-  if (source.includes("evolution")) return "evolution@svjprojekt.cz";
-  return "info@svjprojekt.cz";
-}
-
-function buildMailBody(data, formName) {
-  const labels = {
-    source_page: "Stránka",
-    division: "Divize",
-    brand_scope: "Rozsah značky",
-    product: "Produkt",
-    name: "Jméno / firma",
-    email: "E-mail",
-    phone: "Telefon",
-    service: "Služba",
-    product_type: "Typ produktu",
-    dimensions: "Rozměr",
-    quantity: "Množství",
-    material: "Materiál",
-    lamination: "Laminace / dokončení",
-    deadline: "Termín",
-    service_type: "Typ služby",
-    platform: "Platforma",
-    goal: "Cíl",
-    audience: "Cílový zákazník",
-    brand_style: "Styl značky",
-    deliverables: "Požadované výstupy",
-    budget_range: "Rozpočet",
-    links: "Odkazy / inspirace",
-    car_brand: "Značka auta",
-    car_model: "Model auta",
-    car_year: "Rok auta",
-    engine: "Motor",
-    mileage: "Najeto km",
-    problem: "Problém / zadání",
-    preferred_date: "Preferovaný termín",
-    user_type: "Typ uživatele",
-    intended_use_type: "Hlavní téma použití",
-    company_name: "Firma / provoz",
-    intended_use: "Zamýšlené použití",
-    message: "Zpráva"
-  };
-
-  const fields = [["Formulář", formName]];
-
-  data.forEach((value, key) => {
-    if (!value || ["consent", "website", "form_started_at"].includes(key)) return;
-    fields.push([labels[key] || key, value]);
-  });
-
-  return fields
-    .map(([label, value]) => `${label}: ${value}`)
-    .join("\n");
 }
